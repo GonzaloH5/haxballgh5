@@ -18,7 +18,7 @@ signed in with Discord, one session per app profile, and a unique nick. Cloudfla
   `GET /invites`; `POST /invites/dismiss { id }`.
 - Messages (friends only, 500 characters, 20 a minute, kept 30 days): `POST /messages { to, body }`;
   `GET /messages?with=<id>&before=<id>` (last 50, oldest first; marks theirs read). Unread ones, by sender,
-  come in the presence answer's `notices.messages`.
+  come in the presence answer's `notices.messages`. `GET /notices` gives the notices without sending presence.
 
 Only the SHA-256 of session tokens is stored. Sessions last 90 days from their last use.
 

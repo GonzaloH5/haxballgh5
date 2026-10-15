@@ -7,6 +7,7 @@
 //   POST /invites { to, kind: 'room' | 'watch', room: { name, link }, password? }
 //   GET  /invites, POST /invites/dismiss { id }
 //   POST /messages { to, body }; GET /messages?with=<id>&before=<id> (marks theirs read)
+//   GET  /notices: the notices alone, without sending presence
 // Other players are shown by nick and Discord picture only. Someone who blocked
 // you cannot be found, and you never learn that they did. Friends also see
 // whether you are online and in which room (the app sends it every
@@ -258,6 +259,8 @@ export async function friendsRoute(env, me, method, path, request) {
     return setPresence(env, me, body);
   }
   if (method === 'GET' && path === '/invites') return json({ invites: await incomingInvites(env, me, Date.now()) });
+  // The notices on their own, for an app that does not share its presence.
+  if (method === 'GET' && path === '/notices') return json({ notices: await notices(env, me, Date.now()) });
   if (method === 'GET' && path === '/messages') return thread(env, me, new URL(request.url).searchParams);
   if (method === 'POST' && path === '/messages') {
     let body = {};
