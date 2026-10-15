@@ -19,6 +19,10 @@ signed in with Discord, one session per app profile, and a unique nick. Cloudfla
 - Messages (friends only, 500 characters, 20 a minute, kept 30 days): `POST /messages { to, body }`;
   `GET /messages?with=<id>&before=<id>` (last 50, oldest first; marks theirs read). Unread ones, by sender,
   come in the presence answer's `notices.messages`. `GET /notices` gives the notices without sending presence.
+- Groups (`src/party.js`, up to 8, one per player): `GET /party`; `POST /party/invite { to }` (leader; makes the
+  group), `/party/accept|decline { partyId }`, `/party/leave`, `/party/kick { id }`, `/party/lead { id }`,
+  `/party/msg { body }`, `/party/call { room, password? }` (leader calls the group to a room, 10 minutes).
+  `notices.party` has the group's `rev` (the app refetches when it changes), the call and the invitations.
 
 Only the SHA-256 of session tokens is stored. Sessions last 90 days from their last use.
 

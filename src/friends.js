@@ -14,6 +14,7 @@
 // HEARTBEAT_MS); a player who stops sending is offline after ONLINE_MS.
 
 import { nickKey } from './nick.js';
+import { partyNotice } from './party.js';
 
 const MAX_OUTGOING = 50;
 const MAX_FRIENDS = 300;
@@ -190,12 +191,13 @@ async function unreadMessages(env, me) {
 // What the app shows as notices: invitations, how many friend requests wait,
 // and unread messages.
 async function notices(env, me, now) {
-  const [invites, requests, messages] = await Promise.all([
+  const [invites, requests, messages, party] = await Promise.all([
     incomingInvites(env, me, now),
     count(env, 'SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?', me.id),
-    unreadMessages(env, me)
+    unreadMessages(env, me),
+    partyNotice(env, me, now)
   ]);
-  return { invites, requests, messages };
+  return { invites, requests, messages, party };
 }
 
 // ---- Messages ---------------------------------------------------------------------------

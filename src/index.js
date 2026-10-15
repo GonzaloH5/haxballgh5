@@ -12,6 +12,7 @@
 
 import { cleanNick, nickKey, nickProblem } from './nick.js';
 import { friendsRoute } from './friends.js';
+import { partyRoute } from './party.js';
 
 const LOGIN_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -177,7 +178,7 @@ export default {
         case 'GET /auth/callback': return await authCallback(env, url.searchParams);
         case 'GET /auth/poll': return await authPoll(env, url.searchParams);
       }
-      const signedIn = ['GET /me', 'POST /me/nick', 'POST /auth/logout', 'GET /friends', 'POST /presence', 'GET /invites', 'POST /invites', 'POST /invites/dismiss', 'GET /messages', 'POST /messages', 'GET /notices'].includes(route) || route.startsWith('POST /friends/');
+      const signedIn = ['GET /me', 'POST /me/nick', 'POST /auth/logout', 'GET /friends', 'POST /presence', 'GET /invites', 'POST /invites', 'POST /invites/dismiss', 'GET /messages', 'POST /messages', 'GET /notices', 'GET /party'].includes(route) || route.startsWith('POST /friends/') || route.startsWith('POST /party/');
       if (!signedIn) return fail(404, 'Not found');
       const user = await sessionUser(env, bearer(request));
       if (!user) return fail(401, 'Your session expired, sign in again');
@@ -186,7 +187,8 @@ export default {
         case 'POST /me/nick': return await setNick(env, user, request);
         case 'POST /auth/logout': return await logout(env, user);
       }
-      return (await friendsRoute(env, user, request.method, url.pathname.replace(/\/+$/, ''), request)) || fail(404, 'Not found');
+      const path = url.pathname.replace(/\/+$/, '');
+      return (await friendsRoute(env, user, request.method, path, request)) || (await partyRoute(env, user, request.method, path, request)) || fail(404, 'Not found');
     } catch (err) {
       console.error(route, err);
       return fail(500, 'Server error');
