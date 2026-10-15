@@ -6,6 +6,7 @@
 //        -> also { notices: { invites, requests } }: what the app shows as notices
 //   POST /invites { to, kind: 'room' | 'watch', room: { name, link }, password? }
 //   GET  /invites, POST /invites/dismiss { id }
+//   POST /messages { to, body }; GET /messages?with=<id>&before=<id> (marks theirs read)
 // Other players are shown by nick and Discord picture only. Someone who blocked
 // you cannot be found, and you never learn that they did. Friends also see
 // whether you are online and in which room (the app sends it every
@@ -18,6 +19,10 @@ const MAX_FRIENDS = 300;
 export const HEARTBEAT_MS = 15_000;
 const INVITE_TTL_MS = 10 * 60 * 1000;
 const INVITE_KINDS = ['room', 'watch'];
+const MESSAGE_MAX = 500;
+const MESSAGE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MESSAGES_PER_MINUTE = 20;
+const THREAD_PAGE = 50;
 const ONLINE_MS = 45_000;
 const ROOM_LINK = /^https:\/\/www\.haxball\.com\/play\?c=[A-Za-z0-9_-]{4,20}(&p=1)?$/;
 
@@ -165,13 +170,65 @@ async function incomingInvites(env, me, now) {
   }));
 }
 
-// What the app shows as notices: invitations and how many friend requests wait.
+// Unread messages, by sender: how many and the last one.
+async function unreadMessages(env, me) {
+  const { results } = await env.DB.prepare(
+    'SELECT m.from_id, COUNT(*) AS n, MAX(m.id) AS last_id, u.nick, u.discord_id, u.discord_avatar, u.id AS uid ' +
+    'FROM messages m JOIN users u ON u.id = m.from_id WHERE m.to_id = ? AND m.read_at IS NULL GROUP BY m.from_id'
+  ).bind(me.id).all();
+  if (!results.length) return [];
+  const lasts = await env.DB.prepare(`SELECT id, body, created_at FROM messages WHERE id IN (${results.map(() => '?').join(',')})`).bind(...results.map(r => r.last_id)).all();
+  const byId = new Map(lasts.results.map(m => [m.id, m]));
+  return results.map(r => ({
+    from: { id: r.uid, nick: r.nick, avatar: avatarUrl(r) },
+    count: r.n,
+    last: { id: r.last_id, body: byId.get(r.last_id).body.slice(0, 200), at: byId.get(r.last_id).created_at }
+  }));
+}
+
+// What the app shows as notices: invitations, how many friend requests wait,
+// and unread messages.
 async function notices(env, me, now) {
-  const [invites, requests] = await Promise.all([
+  const [invites, requests, messages] = await Promise.all([
     incomingInvites(env, me, now),
-    count(env, 'SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?', me.id)
+    count(env, 'SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?', me.id),
+    unreadMessages(env, me)
   ]);
-  return { invites, requests };
+  return { invites, requests, messages };
+}
+
+// ---- Messages ---------------------------------------------------------------------------
+
+async function sendMessage(env, me, body) {
+  const to = Number(body.to);
+  const text = typeof body.body === 'string' ? body.body.replace(/\r\n?/g, '\n').trim().slice(0, MESSAGE_MAX) : '';
+  if (!Number.isInteger(to) || !text) return fail(400, 'Write something');
+  if (!(await count(env, 'SELECT COUNT(*) AS n FROM friendships WHERE user_id = ? AND friend_id = ?', me.id, to))) return fail(403, 'You can only write to friends');
+  const now = Date.now();
+  if (await count(env, 'SELECT COUNT(*) AS n FROM messages WHERE from_id = ? AND created_at > ?', me.id, now - 60_000) >= MESSAGES_PER_MINUTE) {
+    return fail(429, 'Too many messages, wait a moment');
+  }
+  const result = await env.DB.batch([
+    env.DB.prepare('DELETE FROM messages WHERE created_at < ?').bind(now - MESSAGE_TTL_MS),
+    env.DB.prepare('INSERT INTO messages (from_id, to_id, body, created_at) VALUES (?, ?, ?, ?)').bind(me.id, to, text, now)
+  ]);
+  return json({ ok: true, message: { id: result[1].meta.last_row_id, mine: true, body: text, at: now } });
+}
+
+// The conversation with a friend, oldest first: the last THREAD_PAGE messages
+// (before message id `before`, for older ones). Their messages become read.
+async function thread(env, me, params) {
+  const other = Number(params.get('with'));
+  const before = Number(params.get('before')) || Number.MAX_SAFE_INTEGER;
+  if (!Number.isInteger(other)) return fail(400, 'Unknown player');
+  const { results } = await env.DB.prepare(
+    'SELECT * FROM messages WHERE ((from_id = ?1 AND to_id = ?2) OR (from_id = ?2 AND to_id = ?1)) AND id < ?3 ORDER BY id DESC LIMIT ?4'
+  ).bind(me.id, other, before, THREAD_PAGE).all();
+  await env.DB.prepare('UPDATE messages SET read_at = ? WHERE to_id = ? AND from_id = ? AND read_at IS NULL').bind(Date.now(), me.id, other).run();
+  return json({
+    messages: results.reverse().map(m => ({ id: m.id, mine: m.from_id === me.id, body: m.body, at: m.created_at, read: m.from_id === me.id ? m.read_at !== null : true })),
+    more: results.length === THREAD_PAGE
+  });
 }
 
 async function invite(env, me, body) {
@@ -201,6 +258,12 @@ export async function friendsRoute(env, me, method, path, request) {
     return setPresence(env, me, body);
   }
   if (method === 'GET' && path === '/invites') return json({ invites: await incomingInvites(env, me, Date.now()) });
+  if (method === 'GET' && path === '/messages') return thread(env, me, new URL(request.url).searchParams);
+  if (method === 'POST' && path === '/messages') {
+    let body = {};
+    try { body = await request.json(); } catch { /* empty body */ }
+    return sendMessage(env, me, body);
+  }
   if (method === 'POST' && (path === '/invites' || path === '/invites/dismiss')) {
     let body = {};
     try { body = await request.json(); } catch { /* empty body */ }
