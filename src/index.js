@@ -177,7 +177,7 @@ export default {
         case 'GET /auth/callback': return await authCallback(env, url.searchParams);
         case 'GET /auth/poll': return await authPoll(env, url.searchParams);
       }
-      const signedIn = ['GET /me', 'POST /me/nick', 'POST /auth/logout', 'GET /friends'].includes(route) || route.startsWith('POST /friends/');
+      const signedIn = ['GET /me', 'POST /me/nick', 'POST /auth/logout', 'GET /friends', 'POST /presence'].includes(route) || route.startsWith('POST /friends/');
       if (!signedIn) return fail(404, 'Not found');
       const user = await sessionUser(env, bearer(request));
       if (!user) return fail(401, 'Your session expired, sign in again');

@@ -2,13 +2,19 @@
 //   GET  /friends                 -> { friends, incoming, outgoing, blocked }
 //   POST /friends/request { nick } -> sends a request (or accepts theirs, if they asked first)
 //   POST /friends/accept|decline|cancel|remove|block|unblock { id }
+//   POST /presence { room: { name, link, players, max } | null, playing } | { offline: true }
 // Other players are shown by nick and Discord picture only. Someone who blocked
-// you cannot be found, and you never learn that they did.
+// you cannot be found, and you never learn that they did. Friends also see
+// whether you are online and in which room (the app sends it every
+// HEARTBEAT_MS); a player who stops sending is offline after ONLINE_MS.
 
 import { nickKey } from './nick.js';
 
 const MAX_OUTGOING = 50;
 const MAX_FRIENDS = 300;
+export const HEARTBEAT_MS = 15_000;
+const ONLINE_MS = 45_000;
+const ROOM_LINK = /^https:\/\/www\.haxball\.com\/play\?c=[A-Za-z0-9_-]{4,20}(&p=1)?$/;
 
 const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
@@ -17,16 +23,32 @@ const fail = (status, error) => json({ error }, status);
 const avatarUrl = row => (row.discord_avatar ? `https://cdn.discordapp.com/avatars/${row.discord_id}/${row.discord_avatar}.png?size=64` : null);
 const player = (row, at) => ({ id: row.id, nick: row.nick, avatar: avatarUrl(row), at });
 
+// A friend's presence: online (and the room, if any), or when they were last seen.
+function presenceOf(row, now) {
+  const fresh = row.p_updated && now - row.p_updated < ONLINE_MS;
+  if (!fresh || !row.p_online) return { online: false, lastSeen: Math.max(row.p_updated || 0, row.last_seen || 0) || null };
+  const room = row.p_room ? { name: row.p_room, link: row.p_link || null, players: row.p_players, max: row.p_max, playing: Boolean(row.p_playing) } : null;
+  return { online: true, room };
+}
+
 async function list(env, me) {
   const rows = (sql, ...args) => env.DB.prepare(sql).bind(...args).all().then(r => r.results);
   const [friends, incoming, outgoing, blocked] = await Promise.all([
-    rows('SELECT u.*, f.since AS at FROM friendships f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ? ORDER BY u.nick_key', me.id),
+    rows('SELECT u.*, f.since AS at, p.online AS p_online, p.room_name AS p_room, p.room_link AS p_link, p.players AS p_players, p.max_players AS p_max, p.playing AS p_playing, p.updated_at AS p_updated ' +
+      'FROM friendships f JOIN users u ON u.id = f.friend_id LEFT JOIN presence p ON p.user_id = u.id WHERE f.user_id = ? ORDER BY u.nick_key', me.id),
     rows('SELECT u.*, r.created_at AS at FROM friend_requests r JOIN users u ON u.id = r.from_id WHERE r.to_id = ? ORDER BY r.created_at DESC', me.id),
     rows('SELECT u.*, r.created_at AS at FROM friend_requests r JOIN users u ON u.id = r.to_id WHERE r.from_id = ? ORDER BY r.created_at DESC', me.id),
     rows('SELECT u.*, b.created_at AS at FROM blocks b JOIN users u ON u.id = b.blocked_id WHERE b.user_id = ? ORDER BY u.nick_key', me.id)
   ]);
   const map = list => list.map(row => player(row, row.at));
-  return json({ friends: map(friends), incoming: map(incoming), outgoing: map(outgoing), blocked: map(blocked) });
+  const now = Date.now();
+  return json({
+    friends: friends.map(row => ({ ...player(row, row.at), presence: presenceOf(row, now) })),
+    incoming: map(incoming),
+    outgoing: map(outgoing),
+    blocked: map(blocked),
+    heartbeatMs: HEARTBEAT_MS
+  });
 }
 
 async function befriend(env, a, b) {
@@ -96,9 +118,38 @@ async function act(env, me, action, body) {
   return list(env, me);
 }
 
+// The app says what the player is doing; { offline: true } when it closes or
+// stops sharing.
+async function setPresence(env, me, body) {
+  const now = Date.now();
+  const r = body && typeof body.room === 'object' && body.room ? body.room : null;
+  const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
+  const small = v => (Number.isInteger(v) && v >= 0 && v <= 100 ? v : null);
+  const online = body.offline === true ? 0 : 1;
+  const room = online && r && text(r.name, 100) ? r : null;
+  await env.DB.prepare(
+    'INSERT INTO presence (user_id, online, room_name, room_link, players, max_players, playing, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ' +
+    'ON CONFLICT(user_id) DO UPDATE SET online = ?2, room_name = ?3, room_link = ?4, players = ?5, max_players = ?6, playing = ?7, updated_at = ?8'
+  ).bind(
+    me.id, online,
+    room ? text(room.name, 100) : null,
+    room && ROOM_LINK.test(room.link) ? room.link : null,
+    room ? small(room.players) : null,
+    room ? small(room.max) : null,
+    room && body.playing === true ? 1 : 0,
+    now
+  ).run();
+  return json({ ok: true, heartbeatMs: HEARTBEAT_MS });
+}
+
 // Routes this module answers, for a signed-in user; null when the route is not one.
 export async function friendsRoute(env, me, method, path, request) {
   if (method === 'GET' && path === '/friends') return list(env, me);
+  if (method === 'POST' && path === '/presence') {
+    let body = {};
+    try { body = await request.json(); } catch { /* empty body */ }
+    return setPresence(env, me, body);
+  }
   if (method !== 'POST' || !path.startsWith('/friends/')) return null;
   let body = {};
   try { body = await request.json(); } catch { /* empty body */ }
