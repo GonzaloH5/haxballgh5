@@ -1,0 +1,14 @@
+{
+  "name": "haxballgh5",
+  "private": true,
+  "type": "module",
+  "description": "HaxBall Desktop accounts backend (Cloudflare Worker + D1)",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply haxballgh5 --remote && wrangler deploy",
+    "test": "node --test test/nick.test.js"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.0"
+  }
+}

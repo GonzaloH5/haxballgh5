@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "haxballgh5",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "observability": { "enabled": true },
+  "vars": {
+    // The Discord app "HaxBall" (also used for Rich Presence). Its client
+    // secret is a Worker secret: npx wrangler secret put DISCORD_CLIENT_SECRET
+    "DISCORD_CLIENT_ID": "1560063588893204530",
+    "PUBLIC_URL": "https://haxballgh5.gonzalo20062010.workers.dev"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "haxballgh5",
+      "database_id": "576f71e2-8e67-448d-9509-d1f63b12f169",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
