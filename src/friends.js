@@ -195,7 +195,8 @@ async function notices(env, me, now) {
     incomingInvites(env, me, now),
     count(env, 'SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?', me.id),
     unreadMessages(env, me),
-    partyNotice(env, me, now)
+    // A failure here must not take presence down with it.
+    partyNotice(env, me, now).catch(err => { console.error('partyNotice', err); return null; })
   ]);
   return { invites, requests, messages, party };
 }
