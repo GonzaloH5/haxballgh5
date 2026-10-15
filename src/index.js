@@ -11,6 +11,7 @@
 //   GET /me, POST /me/nick { nick }, POST /auth/logout
 
 import { cleanNick, nickKey, nickProblem } from './nick.js';
+import { friendsRoute } from './friends.js';
 
 const LOGIN_TTL_MS = 10 * 60 * 1000;
 const SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -176,14 +177,16 @@ export default {
         case 'GET /auth/callback': return await authCallback(env, url.searchParams);
         case 'GET /auth/poll': return await authPoll(env, url.searchParams);
       }
+      const signedIn = ['GET /me', 'POST /me/nick', 'POST /auth/logout', 'GET /friends'].includes(route) || route.startsWith('POST /friends/');
+      if (!signedIn) return fail(404, 'Not found');
       const user = await sessionUser(env, bearer(request));
-      if (!user && ['GET /me', 'POST /me/nick', 'POST /auth/logout'].includes(route)) return fail(401, 'Your session expired, sign in again');
+      if (!user) return fail(401, 'Your session expired, sign in again');
       switch (route) {
         case 'GET /me': return await me(env, user);
         case 'POST /me/nick': return await setNick(env, user, request);
         case 'POST /auth/logout': return await logout(env, user);
       }
-      return fail(404, 'Not found');
+      return (await friendsRoute(env, user, request.method, url.pathname.replace(/\/+$/, ''), request)) || fail(404, 'Not found');
     } catch (err) {
       console.error(route, err);
       return fail(500, 'Server error');

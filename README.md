@@ -7,6 +7,9 @@ signed in with Discord, one session per app profile, and a unique nick. Cloudfla
 - `GET /auth/callback` → Discord comes back here; the Worker makes the session.
 - `GET /auth/poll?state=` → `202` while waiting, `200 { token, user, needsNick }` once, `410` if it expired or failed.
 - With `Authorization: Bearer <token>`: `GET /me`, `POST /me/nick { nick }`, `POST /auth/logout`.
+- Friends: `GET /friends` → `{ friends, incoming, outgoing, blocked }`; `POST /friends/request { nick }` (accepts
+  theirs if they asked first); `POST /friends/accept|decline|cancel|remove|block|unblock { id }`. Others are
+  shown by nick and Discord picture only; whoever blocked you cannot be found.
 
 Only the SHA-256 of session tokens is stored. Sessions last 90 days from their last use.
 
