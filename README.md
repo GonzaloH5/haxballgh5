@@ -12,7 +12,10 @@ signed in with Discord, one session per app profile, and a unique nick. Cloudfla
   shown by nick and Discord picture only; whoever blocked you cannot be found.
 - Presence: the app sends `POST /presence { room: { name, link, players, max } | null, playing }` every 15 s
   (`{ offline: true }` when it closes); `GET /friends` gives each friend `presence`: online and their room, or
-  `lastSeen`. Silent for 45 s means offline.
+  `lastSeen`. Silent for 45 s means offline. Its answer carries `notices: { invites, requests }` for the app.
+- Invitations: `POST /invites { to, kind: 'room' | 'watch', room: { name, link }, password? }` (friends only; a new
+  one replaces the last to that friend; they expire after 10 minutes and are deleted, password included);
+  `GET /invites`; `POST /invites/dismiss { id }`.
 
 Only the SHA-256 of session tokens is stored. Sessions last 90 days from their last use.
 

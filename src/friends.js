@@ -3,6 +3,9 @@
 //   POST /friends/request { nick } -> sends a request (or accepts theirs, if they asked first)
 //   POST /friends/accept|decline|cancel|remove|block|unblock { id }
 //   POST /presence { room: { name, link, players, max } | null, playing } | { offline: true }
+//        -> also { notices: { invites, requests } }: what the app shows as notices
+//   POST /invites { to, kind: 'room' | 'watch', room: { name, link }, password? }
+//   GET  /invites, POST /invites/dismiss { id }
 // Other players are shown by nick and Discord picture only. Someone who blocked
 // you cannot be found, and you never learn that they did. Friends also see
 // whether you are online and in which room (the app sends it every
@@ -13,6 +16,8 @@ import { nickKey } from './nick.js';
 const MAX_OUTGOING = 50;
 const MAX_FRIENDS = 300;
 export const HEARTBEAT_MS = 15_000;
+const INVITE_TTL_MS = 10 * 60 * 1000;
+const INVITE_KINDS = ['room', 'watch'];
 const ONLINE_MS = 45_000;
 const ROOM_LINK = /^https:\/\/www\.haxball\.com\/play\?c=[A-Za-z0-9_-]{4,20}(&p=1)?$/;
 
@@ -139,7 +144,52 @@ async function setPresence(env, me, body) {
     room && body.playing === true ? 1 : 0,
     now
   ).run();
-  return json({ ok: true, heartbeatMs: HEARTBEAT_MS });
+  return json({ ok: true, heartbeatMs: HEARTBEAT_MS, notices: online ? await notices(env, me, now) : null });
+}
+
+// ---- Invitations ----------------------------------------------------------------------
+
+async function incomingInvites(env, me, now) {
+  const { results } = await env.DB.prepare(
+    'SELECT i.*, u.nick, u.discord_id, u.discord_avatar, u.id AS uid FROM invites i JOIN users u ON u.id = i.from_id ' +
+    'WHERE i.to_id = ? AND i.expires_at > ? ORDER BY i.created_at DESC'
+  ).bind(me.id, now).all();
+  return results.map(r => ({
+    id: r.id,
+    from: { id: r.uid, nick: r.nick, avatar: avatarUrl(r) },
+    kind: r.kind,
+    room: { name: r.room_name, link: r.room_link },
+    password: r.password || null,
+    at: r.created_at,
+    expiresAt: r.expires_at
+  }));
+}
+
+// What the app shows as notices: invitations and how many friend requests wait.
+async function notices(env, me, now) {
+  const [invites, requests] = await Promise.all([
+    incomingInvites(env, me, now),
+    count(env, 'SELECT COUNT(*) AS n FROM friend_requests WHERE to_id = ?', me.id)
+  ]);
+  return { invites, requests };
+}
+
+async function invite(env, me, body) {
+  const to = Number(body.to);
+  const room = body.room && typeof body.room === 'object' ? body.room : {};
+  const name = typeof room.name === 'string' ? room.name.slice(0, 100) : '';
+  if (!Number.isInteger(to) || !INVITE_KINDS.includes(body.kind)) return fail(400, 'Bad invitation');
+  if (!name || !ROOM_LINK.test(room.link)) return fail(400, 'Your room has no link to share');
+  if (!(await count(env, 'SELECT COUNT(*) AS n FROM friendships WHERE user_id = ? AND friend_id = ?', me.id, to))) return fail(403, 'You can only invite friends');
+  const password = typeof body.password === 'string' && body.password ? body.password.slice(0, 30) : null;
+  const now = Date.now();
+  await env.DB.batch([
+    // A new invitation replaces the last one to that friend, with a new id (so it shows again).
+    env.DB.prepare('DELETE FROM invites WHERE expires_at <= ? OR (from_id = ? AND to_id = ?)').bind(now, me.id, to),
+    env.DB.prepare('INSERT INTO invites (from_id, to_id, kind, room_name, room_link, password, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(me.id, to, body.kind, name, room.link, password, now, now + INVITE_TTL_MS)
+  ]);
+  return json({ ok: true, expiresInMs: INVITE_TTL_MS });
 }
 
 // Routes this module answers, for a signed-in user; null when the route is not one.
@@ -149,6 +199,14 @@ export async function friendsRoute(env, me, method, path, request) {
     let body = {};
     try { body = await request.json(); } catch { /* empty body */ }
     return setPresence(env, me, body);
+  }
+  if (method === 'GET' && path === '/invites') return json({ invites: await incomingInvites(env, me, Date.now()) });
+  if (method === 'POST' && (path === '/invites' || path === '/invites/dismiss')) {
+    let body = {};
+    try { body = await request.json(); } catch { /* empty body */ }
+    if (path === '/invites') return invite(env, me, body);
+    await env.DB.prepare('DELETE FROM invites WHERE id = ? AND to_id = ?').bind(Number(body.id) || 0, me.id).run();
+    return json({ ok: true });
   }
   if (method !== 'POST' || !path.startsWith('/friends/')) return null;
   let body = {};
